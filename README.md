@@ -10,11 +10,15 @@
 
 استخدم الواجهة للتحكم الكامل
 🔧 المتطلبات:
-المكتبات المطلوبة:
-#include <WiFi.h>
-#include <WebServer.h>
-#include <WebSocketsServer.h>
-#include <ArduinoJson.h>
+اlib_deps = 
+    esp32-arduino/WebServer
+    links2004/WebSockets
+    bblanchon/ArduinoJson
+    espressif/arduino-esp32
+    bodmer/TFT_eSPI
+    witnessmenow/UniversalTelegramBot
+    knolleary/PubSubClient
+    ricmoo/QRCode
 إعدادات الـ ESP32:
 Board: ESP32 Dev Module
 
