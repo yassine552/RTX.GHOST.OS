@@ -217,7 +217,7 @@
 
 ```bash
 # استنساخ المشروع
-git clone https://github.com/yourusername/RTX-GHOST-Enhanced.git
+git clone https://github.com/yassine552/RTX-GHOST-Enhanced.git
 cd RTX-GHOST-Enhanced
 ```
 
