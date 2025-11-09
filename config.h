@@ -193,4 +193,27 @@
 
 #define DEFAULT_STRATEGY STRATEGY_SMART
 
+// 📡 SubGHz / CC1101
+#define SUBGHZ_ENABLED true
+#define CC1101_CS_PIN 5
+#define CC1101_GDO0_PIN 4
+#define CC1101_GDO2_PIN 2
+#define CC1101_MOSI_PIN 23
+#define CC1101_MISO_PIN 19
+#define CC1101_SCK_PIN 18
+
+// ترددات SubGHz
+#define DEFAULT_SUBGHZ_FREQ 433920000  // 433.92 MHz
+#define SUBGHZ_FREQ_315 315000000
+#define SUBGHZ_FREQ_433 433920000
+#define SUBGHZ_FREQ_868 868000000
+#define SUBGHZ_FREQ_915 915000000
+
+// إعدادات SubGHz
+#define SUBGHZ_MAX_SIGNALS 200
+#define SUBGHZ_DEFAULT_REPEAT 5
+#define SUBGHZ_DEFAULT_PULSE_LENGTH 350
+#define SUBGHZ_JAMMER_ENABLED true  // ⚠️ غير قانوني في بعض الدول!
+#define SUBGHZ_AUTO_SAVE true
+
 #endif // CONFIG_H
