@@ -493,7 +493,7 @@ Copyright (c) 2024 RTX-GHOST Team
 
 ### 📧 الاتصال:
 
-- **Email**: yassinrgadhrib90@gmail.com
+- **Email**: yassinegadhrib90@gmail.com
 
 ### 🌟 ساعدنا:
 
